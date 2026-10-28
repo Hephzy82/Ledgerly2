@@ -209,11 +209,11 @@ tr.group td { background: var(--bg); font-weight: 700; font-size: .85rem; }
 .type-grid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 .type-opt { position: relative; }
 .type-opt input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
-.type-opt .box { border: 1px solid var(--line); border-radius: 10px; padding: .7rem .8rem; background: var(--surface); height: 100%; }
+.type-opt .box { display: block; border: 1px solid var(--line); border-radius: 10px; padding: .7rem .8rem; background: var(--surface); height: 100%; }
 .type-opt input:checked + .box { border-color: var(--green); box-shadow: 0 0 0 2px var(--green); background: var(--green-soft); }
 .type-opt input:focus-visible + .box { outline: 2px solid var(--green); outline-offset: 2px; }
 .type-opt strong { display: block; }
-.type-opt span { font-size: .82rem; color: var(--muted); }
+.type-opt .box span { display: block; font-size: .82rem; color: var(--muted); font-weight: 400; margin-top: .15rem; }
 
 /* ---------- modal & toast ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(10, 20, 15, .55); display: grid; place-items: start center; padding: 4vh 1rem; overflow-y: auto; z-index: 50; }
