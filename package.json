@@ -1,0 +1,15 @@
+{
+  "name": "ledgerly",
+  "version": "1.0.0",
+  "description": "Multi-organisation accounting platform with per-client customisation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "dev": "node --watch --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/smoke.test.js test/billing.test.js"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  }
+}
