@@ -284,3 +284,22 @@ tr.group td { background: var(--bg); font-weight: 700; font-size: .85rem; }
 .copy-box { display: flex; gap: .5rem; align-items: center; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; word-break: break-all; }
 .copy-box code { flex: 1; font-size: .85rem; }
 .badge.ok { background: var(--green-soft); color: var(--green); }
+
+/* ---------- department dashboards, tabs, role editor ---------- */
+.tabs button { padding: .4rem .85rem; border-radius: 99px; color: var(--ink); border: 1px solid var(--line); background: var(--surface); font: inherit; cursor: pointer; }
+.tabs button[aria-current="page"] { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .tabs button[aria-current="page"] { color: #0c1512; } }
+.wgrid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.wcard.wide { grid-column: 1 / -1; }
+.wcard .card-title h2, .wcard h2 { font-size: 1rem; }
+.wlist { list-style: none; margin: 0; padding: 0; }
+.wlist li { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-top: 1px solid var(--line); }
+.wlist li:first-child { border-top: 0; }
+.k-value.neg { color: var(--red); }
+.role-perms { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .7rem; margin-bottom: .6rem; }
+.widget-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .8rem; }
+.widget-pick fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem .8rem .7rem; margin: 0; }
+.widget-pick legend { font-weight: 600; padding: 0 .3rem; }
+.widget-pick label.check { display: flex; gap: .5rem; align-items: flex-start; margin: .3rem 0; font-size: .92rem; }
+.widget-pick input:disabled + * , .widget-pick label:has(input:disabled) { opacity: .45; }
+.wgrid > .card, .kpis > .kpi { margin: 0; }
