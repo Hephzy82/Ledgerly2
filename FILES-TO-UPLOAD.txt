@@ -1,0 +1,20 @@
+FILES TO UPLOAD TO GITHUB (keep the same folder layout)
+
+NEW files
+  departments.js
+  public/landing.js
+  public/landing.css
+  public/modules.js
+  test/departments.test.js
+
+CHANGED files (replace the old ones)
+  server.js
+  payments.js
+  package.json
+  README.md
+  public/index.html
+  public/app.js
+  public/style.css
+
+UNCHANGED (do not need to upload): DEPLOY.md, mail.js, templates.js, .gitignore,
+  public/pay.html, public/pay.js, test/smoke.test.js, test/billing.test.js
