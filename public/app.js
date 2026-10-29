@@ -143,7 +143,9 @@ async function render() {
     if (!state.me) await loadMe();
     const resetMatch = hash.match(/^\/reset\/([A-Za-z0-9_-]+)$/);
     if (resetMatch) return viewReset(resetMatch[1]);
-    if (!state.me.user) return viewAuth();
+    if (!state.me.user) return viewPublic(hash);
+    if (hash === '/register') return viewRegister();
+    if (hash === '/admin/roles' && state.me.user.is_admin) { state.setup = null; state.setupOrgId = null; return await LX.pages.adminRoles(); }
     const m = hash.match(/^\/org\/(\d+)(?:\/(.*))?$/);
     if (m) {
       const id = Number(m[1]);
@@ -248,7 +250,7 @@ async function viewHome() {
         <div class="sub">${user.is_admin ? 'Onboard a business, then tailor its accounts and fields.' : `Signed in as ${user.name}.`}</div>
       </div>
       <div class="actions">
-        ${user.is_admin ? html`<button class="btn btn-primary" data-action="new-client">+ Onboard new client</button>` : ''}
+        ${user.is_admin ? html`<a class="btn" href="#/admin/roles">Role templates</a><button class="btn btn-primary" data-action="new-client">+ Onboard new client</button>` : html`<a class="btn" href="#/register">+ Register another business</a>`}
         <button data-action="logout">Log out</button>
       </div>
     </div>
@@ -258,7 +260,7 @@ async function viewHome() {
       <tbody>${list.map((o) => html`<tr>
         <td><a href="#/org/${o.id}/dashboard"><strong>${o.name}</strong></a></td>
         <td>${o.type_label}</td>
-        ${user.is_admin ? html`<td class="num">${o.members}</td><td class="num">${o.transactions}</td><td>${planBadge(o.plan)}</td>` : html`<td><span class="badge">${o.role}</span></td>`}
+        ${user.is_admin ? html`<td class="num">${o.members}</td><td class="num">${o.transactions}</td><td>${planBadge(o.plan)}</td>` : html`<td><span class="badge">${o.role_name || o.role}</span></td>`}
         <td class="num"><a class="btn btn-sm" href="#/org/${o.id}/dashboard">Open</a></td></tr>`)}</tbody>
     </table></div></div>`
     : html`<div class="card empty"><strong>${user.is_admin ? 'No clients yet' : 'You haven’t been added to any organisation yet'}</strong>
@@ -307,21 +309,26 @@ function shell(id, active, { title, sub, actions = '', body }) {
   <div class="shell">
     <aside class="side">
       <div class="logo"><span class="logo-mark">L</span> Ledgerly</div>
-      <div class="org-card"><strong>${s.org.name}</strong><span>${s.org.type_label} · ${s.role}</span></div>
+      <div class="org-card"><strong>${s.org.name}</strong><span>${s.org.type_label} · ${s.role_name}</span></div>
       <nav class="nav" aria-label="Main">
         ${link('dashboard', 'Dashboard')}
-        ${link('transactions', 'Transactions')}
+        ${s.access.accounts !== 'none' ? html`${link('transactions', 'Transactions')}
         <div class="label">Reports</div>
         ${link('reports/profit-loss', 'Profit & Loss')}
         ${link('reports/balance-sheet', 'Balance Sheet')}
-        ${link('reports/trial-balance', 'Trial Balance')}
+        ${link('reports/trial-balance', 'Trial Balance')}` : ''}
+        ${['hr', 'sales', 'inventory'].some((m) => s.access[m] !== 'none') ? html`<div class="label">Departments</div>
+          ${s.access.hr !== 'none' ? link('hr', 'Staff & leave') : ''}
+          ${s.access.sales !== 'none' ? link('sales', 'Sales orders') : ''}
+          ${s.access.inventory !== 'none' ? link('inventory', 'Stock') : ''}` : ''}
         ${isOwner() ? html`<div class="label">Set up</div>
           ${link('accounts', 'Chart of accounts')}
           ${link('fields', 'Custom fields')}
           ${link('team', 'Team')}
+          ${link('roles', 'Roles & dashboards')}
           ${s.org.type === 'school' ? link('online', 'Online payments') : ''}
           ${link('billing', 'Billing')}
-          ${link('settings', 'Settings')}` : html`${link('accounts', 'Accounts')}`}
+          ${link('settings', 'Settings')}` : (s.access.accounts !== 'none' ? html`${link('accounts', 'Accounts')}` : '')}
       </nav>
       <div class="side-foot">
         <span>${state.me.user.name}</span>
@@ -348,12 +355,17 @@ const recordButtons = () => canWrite() ? html`
 async function viewOrg(id, sub) {
   const [page, ...rest] = sub.split('/');
   const view = {
-    dashboard: pageDashboard, transactions: pageTransactions, accounts: pageAccounts, fields: pageFields,
+    dashboard: LX.pages.dashboard, hr: LX.pages.hr, sales: LX.pages.sales, inventory: LX.pages.inventory, roles: LX.pages.roles,
+    transactions: pageTransactions, accounts: pageAccounts, fields: pageFields,
     team: pageTeam, settings: pageSettings, reports: pageReports, ledger: pageLedger,
     billing: pageBilling, online: pageOnline,
   }[page];
   if (!view) { location.hash = `#/org/${id}/dashboard`; return; }
-  if (['fields', 'team', 'settings', 'billing', 'online'].includes(page) && !isOwner()) { location.hash = `#/org/${id}/dashboard`; return; }
+  const A = state.setup.access;
+  const blocked = (['hr', 'sales', 'inventory'].includes(page) && A[page] === 'none')
+    || (['transactions', 'reports', 'accounts', 'ledger'].includes(page) && A.accounts === 'none');
+  if (blocked) { location.hash = `#/org/${id}/dashboard`; return; }
+  if (['fields', 'team', 'settings', 'billing', 'online', 'roles'].includes(page) && !isOwner()) { location.hash = `#/org/${id}/dashboard`; return; }
   const out = await view(id, rest, sub);
   app.innerHTML = shell(id, sub, out).s;
   if (out.after) out.after();
@@ -766,17 +778,24 @@ function openFieldModal(f) {
 /* =====================================================================
    Team & settings
    ===================================================================== */
+// <option>s for the role dropdowns: built-in roles, then this business's department roles.
+function roleOptions(selected) {
+  const opt = (v, l) => html`<option value="${v}" ${selected === v ? raw('selected') : ''}>${l}</option>`;
+  return html`<optgroup label="Built-in">${Object.entries(ROLE_LABELS).map(([v, l]) => opt(v, l))}</optgroup>
+    ${(state.teamRoles || []).length ? html`<optgroup label="Department roles">${state.teamRoles.map((r) => opt(`c${r.id}`, r.name))}</optgroup>` : ''}`;
+}
 async function pageTeam(id) {
-  const { members, invites } = await GET(`/api/orgs/${id}/members`);
+  const [{ members, invites }, { roles }] = await Promise.all([GET(`/api/orgs/${id}/members`), GET(`/api/orgs/${id}/roles`)]);
+  state.teamRoles = roles;
   return {
     title: 'Team', sub: 'Who can see and change this client’s books.',
     actions: html`<button class="btn btn-primary" data-action="new-member">+ Add person</button>`,
     body: html`<div class="card"><div class="table-wrap"><table>
       <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead><tbody>
       ${members.map((m) => html`<tr><td>${m.name}</td><td>${m.email}</td>
-        <td><select data-change="member-role" data-email="${m.email}" aria-label="Role for ${m.name}">${Object.entries(ROLE_LABELS).map(([v, l]) => html`<option value="${v}" ${m.role === v ? raw('selected') : ''}>${l}</option>`)}</select></td>
+        <td><select data-change="member-role" data-email="${m.email}" aria-label="Role for ${m.name}">${roleOptions(m.choice)}</select></td>
         <td class="num"><button class="btn-sm btn-danger" data-action="remove-member" data-id="${m.id}" data-name="${m.name}">Remove</button></td></tr>`)}
-      ${invites.map((i) => html`<tr><td class="muted">Not signed up yet</td><td>${i.email}</td><td><span class="badge amber">Invited · ${i.role}</span></td>
+      ${invites.map((i) => html`<tr><td class="muted">Not signed up yet</td><td>${i.email}</td><td><span class="badge amber">Invited · ${i.role_name || i.role}</span></td>
         <td class="num"><button class="btn-sm" data-action="cancel-invite" data-email="${i.email}">Cancel</button></td></tr>`)}
       ${!members.length && !invites.length ? html`<tr><td colspan="4" class="muted">Nobody has been added yet.</td></tr>` : ''}
       </tbody></table></div></div>
@@ -958,7 +977,7 @@ const actions = {
   'new-member': () => openModal(html`${modalHead('Add a person')}
     <form data-form="member" novalidate>${errorBox()}
       <div class="field"><label for="m-email">Email</label><input id="m-email" name="email" type="email" required></div>
-      <div class="field"><label for="m-role">Role</label><select id="m-role" name="role">${Object.entries(ROLE_LABELS).map(([v, l]) => html`<option value="${v}" ${v === 'accountant' ? raw('selected') : ''}>${l}</option>`)}</select></div>
+      <div class="field"><label for="m-role">Role</label><select id="m-role" name="role">${roleOptions(state.teamRoles && state.teamRoles.length ? `c${state.teamRoles[0].id}` : 'accountant')}</select><div class="hint">Department roles open one dashboard. Manager opens them all.</div></div>
       <div class="modal-foot"><button type="button" data-action="close">Cancel</button><button class="btn btn-primary" type="submit">Add</button></div></form>`),
   'remove-member': async (el) => {
     if (!confirm(`Remove ${el.dataset.name} from this organisation?`)) return;
@@ -983,11 +1002,13 @@ const actions = {
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
-  if (el && actions[el.dataset.action]) actions[el.dataset.action](el, e);
+  const fn = el && (actions[el.dataset.action] || LX.actions[el.dataset.action]);
+  if (fn) fn(el, e);
 });
 
 let searchTimer;
 document.addEventListener('input', (e) => {
+  if (LX.inputs[e.target.dataset.input]) LX.inputs[e.target.dataset.input](e.target);
   if (e.target.dataset.input === 'txsearch') {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => { state.tx.q = e.target.value.trim(); state.tx.offset = 0; loadTxResults(); }, 300);
@@ -998,6 +1019,7 @@ document.addEventListener('change', async (e) => {
   const el = e.target;
   const kind = el.dataset.change;
   if (!kind) return;
+  if (LX.changes[kind]) { LX.changes[kind](el); return; }
   if (kind === 'txfilter') {
     state.tx[el.dataset.key] = el.type === 'checkbox' ? el.checked : el.value;
     state.tx.offset = 0; loadTxResults();
@@ -1113,7 +1135,7 @@ document.addEventListener('submit', async (e) => {
   const form = e.target.closest('form[data-form]');
   if (!form) return;
   e.preventDefault();
-  const handler = forms[form.dataset.form];
+  const handler = forms[form.dataset.form] || LX.forms[form.dataset.form];
   if (!handler) return;
   busy(form, true);
   try { await handler(form, e); } catch (err) { showFormError(err.message); } finally { busy(form, false); }
