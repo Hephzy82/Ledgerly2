@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
     "dev": "node --watch --disable-warning=ExperimentalWarning server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/smoke.test.js test/billing.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/smoke.test.js test/billing.test.js test/departments.test.js"
   },
   "private": true,
   "engines": {

@@ -331,19 +331,22 @@ function createOrganization({ name, type, currency }) {
       used.add(key);
       addField.run(orgId, key, f.label, f.type, JSON.stringify(f.options || []), f.required ? 1 : 0, i);
     });
+    dept.seedOrgRoles(orgId);
     return Number(orgId);
   });
 }
 
-function addMemberOrInvite(orgId, email, role) {
+// `choice` is 'owner' | 'accountant' | 'viewer' or 'c<id>' for a custom department role.
+function addMemberOrInvite(orgId, email, choice) {
+  const { role, roleId } = dept.resolveRoleChoice(orgId, choice);
   const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (user) {
-    db.prepare(`INSERT INTO memberships (user_id, org_id, role) VALUES (?, ?, ?)
-                ON CONFLICT(user_id, org_id) DO UPDATE SET role = excluded.role`).run(user.id, orgId, role);
+    db.prepare(`INSERT INTO memberships (user_id, org_id, role, role_id) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, org_id) DO UPDATE SET role = excluded.role, role_id = excluded.role_id`).run(user.id, orgId, role, roleId);
     return 'added';
   }
-  db.prepare(`INSERT INTO invites (email, org_id, role) VALUES (?, ?, ?)
-              ON CONFLICT(email, org_id) DO UPDATE SET role = excluded.role`).run(email, orgId, role);
+  db.prepare(`INSERT INTO invites (email, org_id, role, role_id) VALUES (?, ?, ?, ?)
+              ON CONFLICT(email, org_id) DO UPDATE SET role = excluded.role, role_id = excluded.role_id`).run(email, orgId, role, roleId);
   return 'invited';
 }
 
@@ -467,34 +470,72 @@ const pay = require('./payments')({
   validEmail, loadCustomFields, throttle, securityHeaders, TEMPLATES,
 });
 
+// Custom roles, per-role dashboards and the HR / Sales / Inventory modules live in departments.js
+const dept = require('./departments')({
+  db, route, ORG, HttpError, bad, requireRole, requireAdmin, inTransaction, cleanText, parseAmount, validEmail,
+  isDate, addColumn, pay, accountingDashboard,
+});
+
 /* ---- auth ---- */
 
-route('POST', '/api/signup', (ctx) => {
-  const name = cleanText(ctx.body.name, 80, 'Name', { required: true });
-  const email = String(ctx.body.email || '').trim().toLowerCase();
-  const password = String(ctx.body.password || '');
+// Validates and creates a user, turning any pending invitations into memberships.
+function registerUser(body, ip) {
+  const name = cleanText(body.name, 80, 'Name', { required: true });
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = String(body.password || '');
   if (!validEmail(email)) throw bad('Please enter a valid email address.');
   if (password.length < 8) throw bad('Password must be at least 8 characters.');
   if (password.length > 200) throw bad('Password is too long.');
-  throttle(`signup:${ctx.ip}`);
+  throttle(`signup:${ip}`);
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw bad('An account with this email already exists. Try logging in.');
 
   const { hash, salt } = hashPassword(password);
   const noUsersYet = db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0;
   // The platform admin is ADMIN_EMAIL if set, otherwise whoever registers first.
   const isAdmin = ADMIN_EMAIL ? email === ADMIN_EMAIL : noUsersYet;
-  const userId = inTransaction(() => {
+  return inTransaction(() => {
     const id = db.prepare('INSERT INTO users (email, name, pw_hash, pw_salt, is_admin) VALUES (?, ?, ?, ?, ?)')
       .run(email, name, hash, salt, isAdmin ? 1 : 0).lastInsertRowid;
-    // Turn any pending invitations for this email into memberships.
-    for (const inv of db.prepare('SELECT org_id, role FROM invites WHERE email = ?').all(email)) {
-      db.prepare('INSERT OR IGNORE INTO memberships (user_id, org_id, role) VALUES (?, ?, ?)').run(id, inv.org_id, inv.role);
+    for (const inv of db.prepare('SELECT org_id, role, role_id FROM invites WHERE email = ?').all(email)) {
+      db.prepare('INSERT OR IGNORE INTO memberships (user_id, org_id, role, role_id) VALUES (?, ?, ?, ?)').run(id, inv.org_id, inv.role, inv.role_id);
     }
     db.prepare('DELETE FROM invites WHERE email = ?').run(email);
     return Number(id);
   });
-  startSession(ctx.res, userId);
+}
+
+route('POST', '/api/signup', (ctx) => {
+  startSession(ctx.res, registerUser(ctx.body, ctx.ip));
   return { ok: true };
+});
+
+// Public facts for the landing page.
+route('GET', '/api/public/info', () => ({
+  templates: Object.entries(TEMPLATES).map(([key, t]) => ({ key, label: t.label, description: t.description })),
+  currencies: CURRENCIES, trial_days: pay.TRIAL_DAYS, price_month: pay.DEFAULT_PRICE,
+}));
+
+// A business owner registers their own company (new account + business, or just a business when logged in).
+route('POST', '/api/register-business', (ctx) => {
+  const b = ctx.body;
+  const businessName = cleanText(b.business_name, 100, 'Business name', { required: true });
+  const type = String(b.type || '');
+  if (!TEMPLATES[type]) throw bad('Choose the kind of business you run.');
+  const currency = String(b.currency || 'NGN');
+  if (!CURRENCIES.includes(currency)) throw bad('Unsupported currency.');
+  throttle(`regbiz:${ctx.ip}`, 10);
+  let userId = ctx.user ? ctx.user.id : null;
+  if (!userId) {
+    const none = db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0;
+    if (none && !ADMIN_EMAIL) throw bad('This platform has not been set up yet. The first account created becomes the platform admin, so please use “Create an account” instead.');
+    userId = registerUser(b, ctx.ip);
+    startSession(ctx.res, userId);
+  } else if (!ctx.user.is_admin && db.prepare("SELECT COUNT(*) AS n FROM memberships WHERE user_id = ? AND role = 'owner'").get(userId).n >= 5) {
+    throw bad('You already own five businesses. Please contact support to add more.');
+  }
+  const orgId = createOrganization({ name: businessName, type, currency });
+  db.prepare("INSERT INTO memberships (user_id, org_id, role, role_id) VALUES (?, ?, 'owner', NULL)").run(userId, orgId);
+  return { ok: true, org_id: orgId };
 });
 
 route('POST', '/api/login', (ctx) => {
@@ -577,8 +618,9 @@ route('GET', '/api/me', (ctx) => {
   }
   const orgs = ctx.user.is_admin
     ? db.prepare(`SELECT id, name, type, currency, 'owner' AS role FROM organizations ORDER BY name`).all()
-    : db.prepare(`SELECT o.id, o.name, o.type, o.currency, m.role FROM memberships m
-                  JOIN organizations o ON o.id = m.org_id WHERE m.user_id = ? ORDER BY o.name`).all(ctx.user.id);
+    : db.prepare(`SELECT o.id, o.name, o.type, o.currency, m.role, r.name AS role_name FROM memberships m
+                  JOIN organizations o ON o.id = m.org_id LEFT JOIN roles r ON r.id = m.role_id AND r.org_id = m.org_id
+                  WHERE m.user_id = ? ORDER BY o.name`).all(ctx.user.id);
   return {
     user: { id: ctx.user.id, name: ctx.user.name, email: ctx.user.email, is_admin: !!ctx.user.is_admin },
     orgs: orgs.map((o) => ({ ...o, type_label: TEMPLATES[o.type]?.label || o.type })),
@@ -627,9 +669,12 @@ route('GET', '/api/admin/orgs', (ctx) => {
 
 route('GET', `${ORG}/setup`, (ctx) => {
   requireRole(ctx, 'viewer');
-  const accounts = db.prepare('SELECT id, code, name, type, tag, active FROM accounts WHERE org_id = ? ORDER BY code').all(ctx.orgId)
-    .map((a) => ({ ...a, active: !!a.active }));
+  const access = dept.describeAccess(ctx.user, ctx.orgId);
+  // People whose role has no accounting access never receive the chart of accounts.
+  const accounts = access.access.accounts === 'none' ? []
+    : db.prepare('SELECT id, code, name, type, tag, active FROM accounts WHERE org_id = ? ORDER BY code').all(ctx.orgId).map((a) => ({ ...a, active: !!a.active }));
   return {
+    ...access,
     org: { id: ctx.org.id, name: ctx.org.name, type: ctx.org.type, type_label: TEMPLATES[ctx.org.type]?.label || ctx.org.type, currency: ctx.org.currency },
     role: ctx.role, accounts, fields: loadCustomFields(ctx.orgId, true), billing: pay.billingInfo(ctx.org),
   };
@@ -732,9 +777,12 @@ route('PUT', `${ORG}/fields/(\\d+)`, (ctx) => {
 
 route('GET', `${ORG}/members`, (ctx) => {
   requireRole(ctx, 'owner');
-  const members = db.prepare(`SELECT u.id, u.name, u.email, m.role FROM memberships m
-                              JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY u.name`).all(ctx.orgId);
-  const invites = db.prepare('SELECT email, role FROM invites WHERE org_id = ? ORDER BY email').all(ctx.orgId);
+  const choice = (r) => (r.role_id ? `c${r.role_id}` : r.role);
+  const members = db.prepare(`SELECT u.id, u.name, u.email, m.role, m.role_id, r.name AS role_name FROM memberships m
+                              JOIN users u ON u.id = m.user_id LEFT JOIN roles r ON r.id = m.role_id AND r.org_id = m.org_id
+                              WHERE m.org_id = ? ORDER BY u.name`).all(ctx.orgId).map((m) => ({ ...m, choice: choice(m) }));
+  const invites = db.prepare(`SELECT i.email, i.role, i.role_id, r.name AS role_name FROM invites i LEFT JOIN roles r ON r.id = i.role_id AND r.org_id = i.org_id
+                              WHERE i.org_id = ? ORDER BY i.email`).all(ctx.orgId).map((i) => ({ ...i, choice: choice(i) }));
   return { members, invites };
 });
 
@@ -743,7 +791,7 @@ route('POST', `${ORG}/members`, (ctx) => {
   const email = String(ctx.body.email || '').trim().toLowerCase();
   const role = String(ctx.body.role || '');
   if (!validEmail(email)) throw bad('Please enter a valid email address.');
-  if (!ROLE_RANK[role]) throw bad('Choose a role.');
+  if (!role) throw bad('Choose a role.');
   return { status: addMemberOrInvite(ctx.orgId, email, role) };
 });
 
@@ -866,15 +914,13 @@ route('GET', `${ORG}/transactions\\.csv`, (ctx) => {
 
 /* ---- reports ---- */
 
-route('GET', `${ORG}/reports/dashboard`, (ctx) => {
-  requireRole(ctx, 'viewer');
-  const today = isDate(ctx.query.today) ? ctx.query.today : new Date().toISOString().slice(0, 10);
+function accountingDashboard(orgId, today) {
   const ym = today.slice(0, 7);
   const monthStart = `${ym}-01`;
   const monthEnd = `${ym}-31`;
 
-  const all = balances(ctx.orgId);
-  const month = balances(ctx.orgId, monthStart, monthEnd);
+  const all = balances(orgId);
+  const month = balances(orgId, monthStart, monthEnd);
   const sum = (list, pred) => list.filter(pred).reduce((s, a) => s + a.balance, 0);
 
   // Last 6 calendar months, oldest first.
@@ -889,7 +935,7 @@ route('GET', `${ORG}/reports/dashboard`, (ctx) => {
     SELECT substr(t.date, 1, 7) AS m, a.type, SUM(e.debit) AS d, SUM(e.credit) AS c
     FROM entries e JOIN transactions t ON t.id = e.tx_id JOIN accounts a ON a.id = e.account_id
     WHERE t.org_id = ? AND t.voided = 0 AND a.type IN ('income','expense') AND t.date >= ?
-    GROUP BY m, a.type`).all(ctx.orgId, `${months[0]}-01`);
+    GROUP BY m, a.type`).all(orgId, `${months[0]}-01`);
   for (const r of rows) {
     if (!series[r.m]) continue;
     if (r.type === 'income') series[r.m].income += r.c - r.d; else series[r.m].expense += r.d - r.c;
@@ -911,6 +957,12 @@ route('GET', `${ORG}/reports/dashboard`, (ctx) => {
     top_expenses: month.filter((a) => a.type === 'expense' && a.balance !== 0).sort((a, b) => b.balance - a.balance).slice(0, 5)
       .map(({ id, code, name, balance }) => ({ id, code, name, balance })),
   };
+}
+
+route('GET', `${ORG}/reports/dashboard`, (ctx) => {
+  requireRole(ctx, 'viewer');
+  const today = isDate(ctx.query.today) ? ctx.query.today : new Date().toISOString().slice(0, 10);
+  return accountingDashboard(ctx.orgId, today);
 });
 
 route('GET', `${ORG}/reports/profit-loss`, (ctx) => {
@@ -1034,6 +1086,7 @@ async function handleApi(req, res, url) {
       ip: clientIp(req),
     };
     if (!ctx.body || typeof ctx.body !== 'object' || Array.isArray(ctx.body)) throw bad('Invalid request body.');
+    dept.guard(ctx, url.pathname);
     const result = await r.handler(ctx);
     if (result && result.__raw !== undefined) {
       res.writeHead(200, {
@@ -1087,4 +1140,4 @@ setInterval(() => {
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Ledgerly running at http://localhost:${PORT}`));
 }
-module.exports = { server, db, pay };
+module.exports = { server, db, pay, dept };

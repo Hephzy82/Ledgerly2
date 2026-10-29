@@ -442,5 +442,5 @@ module.exports = function install(d) {
     return false;
   }
 
-  return { billingInfo, assertActive, trialEndFromNow, handleSpecial, fulfill, DEFAULT_PRICE };
+  return { billingInfo, assertActive, trialEndFromNow, handleSpecial, fulfill, DEFAULT_PRICE, TRIAL_DAYS };
 };

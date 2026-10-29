@@ -121,3 +121,12 @@ Follow **DEPLOY.md**: GitHub, Render, Paystack and email, step by step, with a c
 | `test/` | Automated checks (`npm test`) |
 | `DEPLOY.md` | GitHub → Render → Paystack guide |
 | `data/` | Created on first run; holds your database |
+
+## Departments, roles and dashboards
+
+- **Landing page** at `/` for logged-out visitors, with **Register your business** (`#/register`) so a business can create its own account and organisation. Platform-admin onboarding still works as before.
+- **Roles.** Every business starts with Manager, Accounts Officer, HR Officer, Sales Officer and Inventory Officer. Each role sets None / View / Edit per department and which dashboard widgets show. Only the platform admin edits roles (per business on the *Roles & dashboards* page, or the starting templates at `#/admin/roles`). Owners assign roles on the *Team* page.
+- **Who sees what.** Every role opens only its own dashboard, except roles marked "can open every department's dashboard" (the Manager), which get a tab per department. Owners and the platform admin see everything. The built-in Owner / Accountant / Viewer roles still work.
+- **Real department records.** HR (staff and leave), Sales (orders) and Inventory (items and stock movements) are stored in Ledgerly tables, not derived from the books.
+- Code: `departments.js` (backend), `public/landing.js` + `landing.css` (landing and registration), `public/modules.js` (dashboards, HR / Sales / Inventory pages, role editor). Tests: `test/departments.test.js`.
+- Existing databases upgrade automatically on start (new tables and columns are added; existing members keep their access).
