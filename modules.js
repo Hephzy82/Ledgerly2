@@ -207,11 +207,10 @@ LX.forms.leave = async (form) => {
    Sales
    ===================================================================== */
 const ORDER_LABEL = { quote: 'Quote (not confirmed)', confirmed: 'Confirmed (awaiting payment)', paid: 'Paid', cancelled: 'Cancelled' };
-state.sales = state.sales || { status: '', q: '' };
 
 LX.pages.sales = async function salesPage(id) {
   const edit = canEditMod('sales');
-  const f = state.sales;
+  const f = state.sales = state.sales || { status: '', q: '' };
   return {
     title: 'Sales orders', sub: 'Every order, from quote to paid',
     actions: edit ? html`<button class="btn btn-primary" data-action="new-order">+ New order</button>` : '',
@@ -375,7 +374,7 @@ LX.forms.movement = async (form) => {
    Roles and dashboards
    ===================================================================== */
 const MODULE_KEYS = ['accounts', 'hr', 'sales', 'inventory'];
-async function roleOptions() {
+async function loadRoleOptions() {
   if (!LX.opts) LX.opts = await GET('/api/role-options');
   return LX.opts;
 }
@@ -423,7 +422,7 @@ LX.pages.adminRoles = async function adminRolesPage() {
 };
 
 async function openRoleModal(role) {
-  const opts = await roleOptions();
+  const opts = await loadRoleOptions();
   const editing = !!role;
   const r = role || { name: '', description: '', all_dashboards: false, perms: { accounts: 'none', hr: 'none', sales: 'none', inventory: 'none' }, widgets: [] };
   openModal(html`${modalHead(editing ? `Edit ${r.name}` : 'New role')}
